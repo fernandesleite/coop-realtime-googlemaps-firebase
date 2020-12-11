@@ -4,12 +4,14 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.content.res.Resources
+import android.location.Address
+import android.location.Geocoder
 import android.location.Location
 import android.os.Bundle
-import android.text.format.DateFormat
 import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
+import android.widget.SearchView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -24,6 +26,8 @@ import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.MapStyleOptions
 import com.google.android.gms.maps.model.MarkerOptions
+import com.google.firebase.database.*
+import java.io.IOException
 import java.util.*
 
 class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
@@ -33,6 +37,11 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     private val TAG = MapsActivity::class.java.simpleName
 
     private val REQUEST_LOCATION_PERMISSION = 1
+
+    private val database: FirebaseDatabase = FirebaseDatabase.getInstance()
+
+    private val myRef2: DatabaseReference = database.getReference("marker")
+
 
     private lateinit var mFusedLocationClient: FusedLocationProviderClient
 
@@ -44,6 +53,43 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
             .findFragmentById(R.id.map) as SupportMapFragment
         mapFragment.getMapAsync(this)
 
+        val searchView = findViewById<SearchView>(R.id.sv_location)
+
+        val queryListener = object : SearchView.OnQueryTextListener {
+            override fun onQueryTextSubmit(location: String?): Boolean {
+                var addressList: List<Address>? = null
+                if (location != null || location == "") {
+                    val geocoder = Geocoder(applicationContext)
+                    try {
+                        addressList = geocoder.getFromLocationName(location, 1)
+                    } catch (e: IOException) {
+                        e.printStackTrace()
+                    }
+                    if (addressList != null) {
+                        try {
+                            val address = addressList[0]
+                            val latLng = LatLng(address.latitude, address.longitude)
+                            map.animateCamera(CameraUpdateFactory.newLatLngZoom(latLng, 15f))
+                        } catch (e: IndexOutOfBoundsException) {
+                            e.printStackTrace()
+                            Toast.makeText(
+                                applicationContext,
+                                "Search error: Try being more specific",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+
+                    }
+                }
+                return false
+            }
+
+            override fun onQueryTextChange(p0: String?): Boolean {
+                return true
+            }
+
+        }
+        searchView.setOnQueryTextListener(queryListener)
         mFusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
     }
@@ -84,24 +130,49 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
 
         //setMapStyle(map)
         //map.addGroundOverlay(androidOverlay)
+
+        myRef2.addValueEventListener(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                map.clear()
+                Toast.makeText(applicationContext, "Data changed", Toast.LENGTH_LONG).show()
+                snapshot.children.forEach { dataSnapshop ->
+                    val latlngMarker = dataSnapshop.getValue(LatlngMarker::class.java)
+                    if (latlngMarker != null) {
+                        val latLng = LatLng(latlngMarker.lat, latlngMarker.lng)
+
+                        val snippet = String.format(
+                            Locale.getDefault(),
+                            "Lat: %1$.5f, Long: %2$.5f",
+                            latLng.latitude,
+                            latLng.longitude,
+                        )
+                        map.addMarker(
+                            MarkerOptions().position(latLng).title(getString(R.string.dropped_pin))
+                                .snippet(snippet).icon(
+                                    BitmapDescriptorFactory.defaultMarker(
+                                        BitmapDescriptorFactory.HUE_BLUE
+                                    )
+                                )
+                        )
+                    }
+                }
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+            }
+
+        })
     }
+
 
     private fun setMapLongClick(map: GoogleMap) {
         map.setOnMapLongClickListener { latLng ->
-            val snippet = String.format(
-                Locale.getDefault(),
-                "Lat: %1$.5f, Long: %2$.5f",
-                latLng.latitude,
-                latLng.longitude,
-            )
-            map.addMarker(
-                MarkerOptions().position(latLng).title(getString(R.string.dropped_pin))
-                    .snippet(snippet).icon(
-                        BitmapDescriptorFactory.defaultMarker(
-                            BitmapDescriptorFactory.HUE_BLUE
-                        )
-                    )
-            )
+            val myRef: DatabaseReference = database.getReference("marker").push()
+
+            val marker = LatlngMarker(latLng.latitude, latLng.longitude)
+
+            myRef.setValue(marker)
+
         }
     }
 
@@ -154,14 +225,18 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         if (enableMyLocation()) {
             mFusedLocationClient.lastLocation.addOnSuccessListener { location: Location? ->
                 currentLoc = location
-                if(location != null) {
+                if (location != null) {
                     val currentLocationLatLng = LatLng(
                         currentLoc!!.latitude,
                         currentLoc!!.longitude
                     )
-                    map.moveCamera(CameraUpdateFactory.newLatLngZoom(currentLocationLatLng, zoomLevel))
-                }
-                else {
+                    map.moveCamera(
+                        CameraUpdateFactory.newLatLngZoom(
+                            currentLocationLatLng,
+                            zoomLevel
+                        )
+                    )
+                } else {
                     Toast.makeText(this, "Location Off", Toast.LENGTH_LONG).show()
                 }
 
